@@ -1,0 +1,315 @@
+#!/bin/sh
+
+# This script tries its best to detect partitions and fill in
+# /var/state/flash-layout.rc with the related information. It cannot make use
+# of arrays nor complex variable manipulations because we want it to run even
+# with the simplest shell such as ash.
+#
+# It supports the following command line options :
+#   -q : quiet
+#   -v : verbose
+#   -k : keep filesystems mounted and do not complain if cannot write
+#   -d <dir> : use <dir> instead of /var/state for the layout file
+#   -f <dir> : use <dir> instead of /flash for the software partition
+#   -h <dir> : use <dir> for the hardware partition
+
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+#
+# The following settings may be altered by the command line options
+
+# set by '-k' to keep the flash partition mounted
+KEEP_MOUNTED=
+# set by '-q' to remove non-critical messages
+QUIET=
+# set by '-v' to increase verbosity level
+VERBOSE=
+# set by '-s' to force scanning even if no "img=" argument is found on cmdline
+SCAN=
+
+# set by '-f' to change the flash mount point
+FLASH_DIR=/flash
+# set by '-h' to use a different mount point for the flash hardware partition
+HARDW_DIR=
+# set by '-d' to change the layout file directory
+LAYOUT_DIR=/var/state
+
+#
+# These settings may not be altered except for debugging purposes
+
+LAYOUT_RC=flash-layout.rc
+LAYOUT_TMP=.flash-layout.rc
+
+PROC_PART=/proc/partitions
+PROC_CMDL=/proc/cmdline
+PROC_MTD=/proc/mtd
+
+# Some global variables which will be initialized later
+IMG_CMDLINE=
+FLASH_CMDLINE=
+
+# utility functions
+get_flash_from_cmdline() {
+	flash="$(cat $PROC_CMDL)"
+	[ -z "${flash##*[ 	]flash=*}" ] || return 1
+	flash="${flash##*[ 	]flash=}"
+	flash="${flash%% *}"
+	[ -z "${flash##/dev/*}" ] && flash="${flash#/dev/}"
+	FLASH_CMDLINE="$flash"
+}
+
+get_img_from_cmdline() {
+	img="$(cat $PROC_CMDL)"
+	[ -z "${img##*[ 	]img=*}" ] || return 1
+	img="${img##*[ 	]img=}"
+	img="${img%% *}"
+	IMG_CMDLINE="$img"
+}
+
+# Given an MTD partition number in $1, return its size in blocks in $REPLY, and
+# 0 as a return value. If the partition is not found, returns 1 and REPLY is
+# left undefined.
+get_mtd_size() {
+	if [ -e "/sys/class/mtd/mtd$1/size" ]; then
+		REPLY=$(cat "/sys/class/mtd/mtd$1/size")
+		REPLY=$((REPLY / 1024))
+		return 0
+	fi
+
+	while read dev size erasesz name rest; do
+		if [ "${dev%:}" = "mtd${1%:}" ]; then
+			REPLY=$((0x$size / 1024))
+			return 0
+		fi
+	done < "$PROC_MTD"
+	return 1
+}
+
+# Given an MTD partition number in $1, return its name in $REPLY, and 0 as a
+# return value. If the partition is not found, returns 1 and REPLY is left
+# undefined.
+get_mtd_name() {
+	if [ -e "/sys/class/mtd/mtd$1/name" ]; then
+		REPLY=$(cat "/sys/class/mtd/mtd$1/name")
+		return 0
+	fi
+
+	while read dev size erasesz name rest; do
+		if [ "${dev%:}" = "mtd${1%:}" ]; then
+			REPLY="$name"
+			REPLY=${REPLY#\"}; REPLY=${REPLY%\"}
+			return 0
+		fi
+	done < "$PROC_MTD"
+	return 1
+}
+
+# Given a UBI device number in $1 and volume number in $2, return its size in
+# blocks in $REPLY, and 0 as a return value. If it is not found, returns 1 and
+# REPLY is left undefined.
+get_ubi_size() {
+	if [ -e "/sys/class/ubi/ubi$1_$2/data_bytes" ]; then
+		REPLY=$(cat "/sys/class/ubi/ubi$1_$2/data_bytes")
+		REPLY=$((REPLY / 1024))
+		return 0
+	fi
+	return 1
+}
+
+# Given a UBI device number in $1 and volume number in $2, return its name in
+# $REPLY, and 0 as a return value. If it is not found, returns 1 and REPLY is
+# left undefined.
+get_ubi_name() {
+	if [ -e "/sys/class/ubi/ubi$1_$2/name" ]; then
+		REPLY=$(cat "/sys/class/ubi/ubi$1_$2/name")
+		return 0
+	fi
+	return 1
+}
+
+# Returns in $REPLY the identified type of the image located on the device in
+# $1, and returns zero. If the device cannot be read, 1 is returned and REPLY
+# is left undefined. A read access is made to the device.
+get_image_type() {
+	local sig
+
+	REPLY=""
+	sig=$(od -An -tx1 -N4 2>/dev/null < "$1" | tr -d ' ')
+	case "$sig" in
+		"") return 1 ;;
+		ffffffff) REPLY="empty"    ;;
+		1f8b0800) REPLY="gzip"     ;;
+		fd377a58) REPLY="xz"       ;;
+		68737173) REPLY="squashfs" ;;
+		55424923) REPLY="ubi"      ;;
+		27051956) REPLY="uimage"   ;;
+		85190320) REPLY="jffs2"    ;;
+		eb??90??) REPLY="fat"      ;;
+		e9??00??) REPLY="fat"      ;;
+		e9??01??) REPLY="fat"      ;;
+	esac
+	[ -n "$REPLY" ] && return 0;
+
+	# The FS was not identified. It can be an ext[234] FS which is easy to
+	# spot using its 0xEF53 signature (little endian).
+	sig=$(od -j 1080 -tx1 -An -N2 2>/dev/null < "$1" | tr -d ' ')
+
+	case "$sig" in
+		"") return 1 ;;
+		53ef) REPLY="ext2" ;;
+	esac
+	return 0
+}
+
+# Tries to scan the volumes list for the UBI device attached to the MTD number
+# passed in argument. Each entry found is displayed as a line beginning with
+# "VOL_MTD" followed by the MTD number, then "_" then the volume number.
+# It only works when /sys is mounted. No error is returned.
+scan_vol_list() {
+	local mtd=$1
+	local size
+	local name
+	local img
+	local ubidir
+	local ubi
+	local vol
+
+	[ -d /sys/class/ubi/. ] || return 0
+
+	ubi=""
+	for ubidir in /sys/class/ubi/ubi*; do
+		[ -e "$ubidir/mtd_num" ] || continue
+		[ "$(cat $ubidir/mtd_num 2>/dev/null)" = "$mtd" ] || continue
+		ubi="${ubidir##*ubi}"
+		break
+	done
+	[ -n "$ubi" ] || return 0
+
+	vol=0
+	while [ -e ${ubidir}_${vol} ]; do
+		get_ubi_size $ubi $vol && size=$REPLY || continue
+		get_ubi_name $ubi $vol && name=$REPLY || continue
+		get_image_type /dev/ubi${ubi}_$vol && img=$REPLY || continue
+		echo "VOL_MTD${mtd}_${vol}=/dev/ubi${ubi}_$vol:$size:$name:$img"
+		vol=$((vol+1))
+	done
+}
+
+# Tries to scan the list of MTD partitions. Each entry found is displayed as a
+# line beginning with "PART_MTD" followed by the MTD number. If a partition is
+# found to contain an UBI image, the list of UBI volumes already attached to
+# this partition is scanned as well. No error is returned.
+scan_mtd_list() {
+	local mtd
+	local size
+	local name
+	local img
+
+	if [ -d /sys/class/mtd/. ]; then
+		mtd=0
+		while [ -e /sys/class/mtd/mtd$mtd ]; do
+			get_mtd_size $mtd && size=$REPLY || continue
+			get_mtd_name $mtd && name=$REPLY || continue
+			get_image_type /dev/mtd$mtd && img=$REPLY || continue
+			echo "PART_MTD$mtd=/dev/mtd$mtd:$size:$name:$img"
+			if [ "$img" = "ubi" ]; then
+				scan_vol_list $mtd
+			fi
+			mtd=$((mtd+1))
+		done
+	else
+		while read dev size erasesz name rest; do
+			[ -n "$dev" -a -z "${dev##mtd*}" ] || continue
+			mtd=${dev#mtd}; mtd=${mtd%:}
+			get_mtd_size $mtd && size=$REPLY || continue
+			get_mtd_name $mtd && name=$REPLY || continue
+			get_image_type /dev/mtd$mtd && img=$REPLY || continue
+			echo "PART_MTD$mtd=/dev/mtd$mtd:$size:$name:$img"
+		done < "$PROC_MTD"
+	fi
+}
+
+# This function dumps the known variables into the layout file.
+dump_layout() {
+    if [ ! -d "$LAYOUT_DIR/." ]; then
+	rm -f "$LAYOUT_DIR" >/dev/null
+	mkdir -p "$LAYOUT_DIR" || return 1
+    fi
+    rm -f "$LAYOUT_DIR/$LAYOUT_TMP"
+    scan_mtd_list > "$LAYOUT_DIR/$LAYOUT_TMP"
+###################################################################################
+    #(   echo "FLASH_MBR=/dev/$FLASH_MBR"
+    #    echo "FLASH_HW=/dev/$FLASH_HW"
+    #    echo "FLASH_SW=/dev/$FLASH_SW"
+    #	echo "FOUND_IMG1=$FOUND_IMG1"
+    #	echo "FOUND_IMG2=$FOUND_IMG2"
+    #) > "$LAYOUT_DIR/$LAYOUT_TMP"
+    mv "$LAYOUT_DIR/$LAYOUT_TMP" "$LAYOUT_DIR/$LAYOUT_RC"
+}
+
+# Creates an empty layout file
+touch_layout_file() {
+    if [ ! -d "$LAYOUT_DIR/." ]; then
+	rm -f "$LAYOUT_DIR" >/dev/null
+	mkdir -p "$LAYOUT_DIR" || return 1
+    fi
+    rm -f "$LAYOUT_DIR/$LAYOUT_TMP" "$LAYOUT_DIR/$LAYOUT_RC"
+    touch "$LAYOUT_DIR/$LAYOUT_RC"
+}
+
+# usage: $0 [$arg]
+usage() {
+    [ -n "$1" ] && echo "Unknown argument: $1" >&2
+    echo "Usage: ${0##*/} [-qvks] [-d state_dir] [-f flash_dir] [-h hw_dir]" >&2
+    exit 1
+}
+
+#######################################################################
+# Main entry point : parses command line and iterates over try_mount()
+#######################################################################
+
+while [ $# -gt 0 ]; do
+    [ -z "${1##-*}" ] || break
+    if [ "$1" = "-q" ]; then QUIET=1
+    elif [ "$1" = "-v" ]; then VERBOSE=1
+    elif [ "$1" = "-k" ]; then KEEP_MOUNTED=1
+    elif [ "$1" = "-s" ]; then SCAN=1
+    elif [ "$1" = "-d" ]; then
+	[ $# -ge 2 ] || usage
+        LAYOUT_DIR="$2"
+        shift
+    elif [ "$1" = "-f" ]; then
+	[ $# -ge 2 ] || usage
+        FLASH_DIR="$2"
+        shift
+    elif [ "$1" = "-h" ]; then
+	[ $# -ge 2 ] || usage
+        HARDW_DIR="$2"
+        shift
+    else
+	usage "$1"
+    fi
+    shift
+done
+
+# First, check if a flash device and/or an image were specified on the command line
+get_flash_from_cmdline
+get_img_from_cmdline
+
+# Don't try to mount our partitions if the OS was not booted from a compliant
+# bootloader. Compliant bootloaders pass "img={active|backup}" on the kernel
+# command line. We still do it if "-s" was specified, which should only be used
+# for manual mounting.
+#if [ -z "$IMG_CMDLINE" -a -z "$SCAN" ]; then
+#    if [ -n "$VERBOSE" ]; then
+#	echo "Not scanning partitions since 'img=' not passed by the bootloader."
+#	echo "You may want to force a scan by passing '-s' on the command line."
+#    fi
+#    # Touch the layout file so that programs don't call us all the time.
+#    touch_layout_file
+#    exit 1
+#fi
+
+scan_mtd_list
+dump_layout
