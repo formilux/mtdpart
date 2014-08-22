@@ -1,0 +1,292 @@
+2014/08/22 - Flash layout
+
+We need to be able to store multiple information for each storage location.
+A config, kernel or rootfs can appear in multiple forms :
+
+  - direct file on a partition
+  - direct file on a UBI volume
+  - direct file on a FAT or ext2 partition
+  - file in a boot loader envelope on a partition
+  - file in a boot loader envelope on a UBI volume
+  - file in a boot loader envelope on a FAT or ext2 partition
+  - file system on a partition used as a block device
+  - file system on a UBI volume used as a block device
+  - file system on a UBI FS
+
+Thus we need for each entry to indicate :
+  - what MTD partition number and name it is located on
+  - what UBI volume number and name it is located on
+  - what file system (if any) is needed to access the data
+  - the file name if it is on a file system
+  - what envelope format (if any) it uses
+  - what compression it uses
+
+We also have to indicate what we discovered and what is available. For example,
+it can be useful to know that 2 system images were found with their respective
+versions.
+
+In order to detect the storage and/or encapsulation methods, we rely on three
+steps :
+
+   1) enumerate the MTD partitions and their respective names, by parsing
+      /proc/mtd or /sys/class/mtd/mtd*[0-9]
+
+   2) detect partition contents based on their 4 first bytes, for example using
+      "od -N4 -An -tx1" :
+
+      1f 8b 08 00 => gzip => config.tgz
+      fd 37 7a 58 => xz   => config.txz
+      68 73 71 73 => squashfs raw => rootfs on mtdblock
+      55 42 49 23 => UBI => scan volumes
+      27 05 19 56 => uImage/uInitrd => RAM-loaded kernel or rootfs
+      85 19 03 20 => JFFS2 => mountable FS
+      eb xx 90 xx => likely FAT
+      e9 xx 00 xx => likely FAT
+      e9 xx 01 xx => likely FAT
+      ff ff ff ff => empty (non formated)
+
+   3) scan UBI volumes
+
+Names and types could be stored this way :
+
+   { part number, device path, size, name, sig }
+   { part number, vol number, device path, size, name, sig }
+
+That way the consumers can simply scan the list of known volumes and look for
+the names they want, filter based on sizes and adapt their access method based
+on the signature.
+
+When certain types are recognized for sure, they can be reported directly so
+that upper layer tools can make use of this without scanning anything. In this
+case, the naming should be normalized and the pointed values should be the
+devices so that there's no ambiguity when looking for how to use them.
+
+Eg: on x86, we have this :
+
+	FLASH_MBR=/dev/sda
+	FLASH_HW=/dev/sda1
+	FLASH_SW=/dev/sda2
+	FOUND_IMG1=alb2k-6.5.0-6090
+	FOUND_IMG2=alb2k-6.0.4-6088
+
+On a mirabox, we can have something like this :
+
+	PART_MTD0=/dev/mtd0:1048576:uboot:
+	PART_MTD1=/dev/mtd1:524288:env:
+	PART_MTD2=/dev/mtd2:524288:board:gzip
+	PART_MTD3=/dev/mtd3:6291456:config:gzip
+	PART_MTD4=/dev/mtd4:8388608:kernel:uimage
+	PART_MTD5=/dev/mtd5:16777216:initrd:uimage
+	PART_MTD6=/dev/mtd6:503316480:rootfs:ubi
+	PART_MTD7=/dev/mtd7:536870912:data:ubi
+	VOL_MTD6_0=/dev/ubi0_0:8773632:kernel1:empty
+	VOL_MTD6_1=/dev/ubi0_1:25288704:rootfs1:squashfs
+	VOL_MTD6_2=/dev/ubi0_2:8773632:kernel2:empty
+	VOL_MTD6_3=/dev/ubi0_3:25288704:rootfs2:empty
+	VOL_MTD6_4=/dev/ubi0_4:8773632:config:empty
+	FLASH_HW=/dev/mtd2
+	FLASH_KRN1=/dev/mtd4
+	FLASH_IRD1=/dev/mtd5
+
+Note that we don't want to mix volumes and partitions within a same list
+(eg: kernel1/kernel2). So in the example above, since we found one valid
+kernel in a partition, we don't look for another one in UBI. Same for the
+initrd.
+
+We can also think about considering that UBI has precedence over partitions
+since it can be modified without touching the boot loader, thus is likely the
+most recent installation. In this case, we'd likely get the following output :
+
+	FLASH_KRN1=/dev/mtd4
+	FLASH_IRD1=/dev/ubi0_1
+
+Indeed, there's no valid kernel on any volume, so we only keep the MTD one. But
+since we find a valid rootfs on the MTD, we consider this one as the right one.
+
+The discovery utility must be configurable to skip some detection. For example
+we must be able not to discover volumes, for example because UBI tools are not
+installed, or because upper layers are unaware of them.
+
+We should be able to store at least :
+
+  - FLASH_BRD    : board-specific information (serial, MAC, ...)
+  - FLASH_KRN1/2 : kernel
+  - FLASH_IRD1/2 : initrd
+  - FLASH_RFS1/2 : rootfs
+  - FLASH_CFG1/2 : config
+  - FLASH_MNT    : equivalent of /flash on grub images
+  - FLASH_NV     : equivalent of /nv (eg: jffs2)
+
+Some names should be recognizable :
+
+  - "kernel", "uImage", "linux" : kernel
+  - "initrd", "uInitrd"         : initrd
+  - "root", "rootfs", "system"  : rootfs
+
+The upper layers should decide whether we use an initrd or a rootfs. One way to
+decide may be to check in /proc/cmdline to see if root is set to ram0,
+indicating that the boot loader has loaded a uImage, or if it is set to ubi*,
+indicating that a volume is in use instead, hence probably the rootfs above.
+
+An improvement on top of what is written above is to have image number 0 be the
+"rescue" one, the one we read when both other ones are missing, and that we
+never write to (unless the other ones have not been identified). Thus we could
+decide that image1/image2 are preferably on top of UBI and that image 0 is the
+partition one.
+
+The principle is not easy :
+  - if we have no image, nothing is set.
+
+  - if we have a single image whose name matches one of the expected image
+    names (eg: "config*"), then this image is necessarily image0.
+
+  - if we have 3 images whose names match one of the expected image names, and
+    one is called with a suffix "1", and another one with suffix "2", then they
+    become images 1 and 2, and image0 is the other one.
+
+  - if we have 3 images, one on a partition and two on a volume, then the one
+    on the partition becomes image0 and the other ones are numberred in their
+    order of appearance (Note: or alphanumerical sort on names ?).
+
+  - if we have 3 images, with two or three on a partition, then they're
+    numbered in their order of appearance (Note: or alphanumerical sort on
+    names ?).
+
+  - if we have more than 3 images, it's probably best to stick to the first 3
+    ones for now.
+
+  - if we have 2 images, if one is on a part and the other on a volume, then
+    the one on the part is image0 and the other one is image1.
+
+  - if we have 2 images, either both on part or both on volumes, then they are
+    respectively image1 and image2 (either according to their names or positions)
+
+Note that in the case where no image name is found for a given image type, we
+can make use of auto-detection. Some image types are unambiguous :
+    - "squashfs" is a rootfs
+    - "gzip", "xz" are compressed configs (tar.xz/tar.gzip)
+    - "jffs2", "fat" indicate an FS-based storage
+    - "uimage" is either a kernel or an uinitrd (differenciable by byte at offset
+      0x1e: 0x02 = kernel, 0x03 = ramdisk). Maybe we should use "uimage" only for
+      an unrecognized uimage format, then "ukernel" or "uinitrd" for uimage
+      encapsulated kernel and initrd.
+    - "empty" can be a rootfs (second one), jffs2 (main or second config),
+       compressed config (main or second) or empty second kernel.
+
+Partitions should be assignable by /proc/cmdline if needed, since /proc/cmdline
+can be assigned in the kernel config while we don't necessarily want to force
+partitions sizes in the kernel (if it needs to be portable across some devices).
+
+Also some devices do not allow the boot loader's settings to be modified, or
+doing so represents a lot of risks of bricking the device. It's another case
+where forcing the assignment in the kernel's cmdline could help.
+
+Thus the detection order should be the following :
+
+   - assign explicit images based on cmdline.
+
+   - among the remaining ones, use their names to try to spot their type,
+     though they won't necessarily be assigned
+
+   - among the remaining ones (unknown names), try to use their detected
+     types to spot their type, but only if the target type has less than
+     3 images. Otherwise leave them "unassigned".
+
+The proposed way to assign an image could be :
+
+      img.<device>=<name>
+
+   - <device> is mtd2, ubi0_4, etc...
+   - <name> is either a specific name ("config0", "rootfs1", ...) or a generic
+     name ("config"). It simply overrides the name found in the mtd/vol.
+
+=> conclusion about names :
+
+   - if mtd part names have a number (0, 1, or 2), they are exactly assigned to
+     that image.
+
+   - if mtd part names have no number or an out of bounds number, they're
+     automatically assigned according to the process above.
+
+A special case for the rescue image (0) : it's not always present, so if some
+parts are forced (eg: image1 is forced), the second image is the one looking
+mostly like the first one. The third one if any will *probably* be the rescue
+image. Most likely image1 and 2 are always the same size, while that's not
+mandatory for the rescue image.
+
+One of the difficulties is that some devices use a very special flash layout
+where some partitions overlap. For example, here is a partition layour found
+on a TP-Link compatible device :
+
+    0x000000000000-0x000000020000 : "u-boot"
+    0x000000020000-0x000000130000 : "kernel"
+    0x000000130000-0x000000ff0000 : "rootfs"
+    0x0000008e0000-0x000000ff0000 : "rootfs_data"
+    0x000000ff0000-0x000001000000 : "art"
+    0x000000020000-0x000000ff0000 : "firmware"
+
+By name :
+
+|<-- u-boot -->|<-------------------- firmware ------------------>|<-- art -->|
+               |<-- kernel -->|<------------ rootfs ------------->|
+                              |<-- unnamed -->|<-- rootfs_data -->|
+
+By device :
+
+|<--- mtd0 --->|<--------------- mtd5 --------------->|<-- mtd4 -->|
+               |<-- mtd1 -->|<-------- mtd2 --------->|
+                            |<-- ???? -->|<-- mtd3 -->|
+
+The real rootfs is on the unnamed partition, which starts at "rootfs" and ends
+before "rootfs_data" (which is used to store data for an overflay FS on such a
+device). The beginning of the partition is given in the kernel image, which
+starts with a descriptor that both u-boot and the kernel's "tplinkpart" parser
+understand to establish the whole partition layout. Also note that partition
+names and numbers could change because rootfs_data is added on the fly thanks
+to a kernel config option to reassign unused squashfs space to this partition.
+Thus even the device number could change depending on the kernel build options.
+
+Unfortunately, /proc/mtd cannot report this as there is no start offset :
+
+    # cat /proc/mtd 
+    dev:    size   erasesize  name
+    mtd0: 00020000 00010000 "u-boot"
+    mtd1: 00110000 00010000 "kernel"
+    mtd2: 00ec0000 00010000 "rootfs"
+    mtd3: 00710000 00010000 "rootfs_data"
+    mtd4: 00010000 00010000 "art"
+    mtd5: 00fd0000 00010000 "firmware"
+
+And /sys doesn't know anything about the start offset either.
+
+We can however detect such partition schemes : they're necessarily on MTD1,
+with MTD0=128kB. The header size is 512B which is reflected at position 128
+as a big endian 32-bit integer, and the version code at offset 0 equals
+0x01000000 in big endian (or 1 in little endian). The 4 words at 128 look
+like this (example) :
+
+    00 00 02 00 # kernel_ofs
+    00 10 FE 00 # kernel_len : rounded up, also defines start of the squashfs
+    00 10 00 00 # rootfs_ofs : only used if kernel_len doesn't work
+    00 7A 50 00 # rootfs_len : this is the actual size of the squashfs
+
+The rootfs_data (if enabled) starts after the rootfs_len rounded up to the
+erase size.
+
+Due to this behaviour, it could be interested in the future to store both the
+allocated size and the current size. That would allow us to save images and to
+also extend them.
+
+###############################
+
+For each image, we'd end up with the following matrix :
+
+
+   Image[0]  Image[1]  Image[2]
+     none      none      none     => no image
+    unknown    none      none     => image0 = image[0] (read only)
+     empty     none      none     => image0 = image[0] (write only)
+     part      none      none     => image0 = image[0] (read/write)
+     vol       none      none     => image0 = image[0] (read/write)
+     part      part      none     => image1 = image[0], image2 = image[1]
+
