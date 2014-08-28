@@ -1,0 +1,87 @@
+2014/08/27 - saving config to NAND partitions
+
+Saving a configuration to a NAND partition is not always easy :
+
+- NAND requires wear levelling
+- NAND requires handling of bad blocks
+- config partitions are very small (128 kB to 1 MB)
+- ext2 is suited to these sizes but not to NAND.
+- JFFS2 is not easy to detect/check and can take a long time to mount on large
+  partitions or when errors are detected
+- UBI has a huge overhead (typically 10 MB on a 128 MB flash device) making
+  it impractical to use on config-only FS
+- managing multiple versions is often desired but not always easy to do
+
+The idea here is to manage bad blocks and page allocation ourselves directly on
+the MTD device. We don't need much to store a configuration, we only need to be
+able to retrieve the *last* configuration saved, and optionally some older ones.
+
+The idea is thus to implement a basic circular block list. The typical
+(length,contents) model fits this requirement well at first glance. But, since
+bad blocks can appear anywhere, we need to be able to sacrifice any area. That
+means that in the worst case that and end of config and the beginning of a new
+one can have vanished in a bad block. Thus we'll need to implement a BEGIN tag
+and an END tag that are unique and that can easily be scanned when needed. Each
+configuration entry will thus look like this :
+
+  - 32b: BEGIN tag
+  - 32b: MAGIC + FS Version + FS format flags
+  - 32b: config version number (unique)
+  - 32b: config size (how many XXX bytes below)
+  - XXX bytes : contents
+  - 32b: END tag
+
+Any occurrence of the BEGIN or END tag in the contents will have to be escaped.
+A BEGIN tag of 0xFFFFFFFF indicates an empty NAND. A BEGIN tag of 0x00000000
+indicates an empty regular block device. Note that in practice, what's said
+above is true if the MAGIC and config version number and sizes also match the
+same value (check 16 bytes at once). For that reason, null sizes are not
+allowed, and config version number starts with 1 and rolls over at 0xFFFFFFFE.
+
+Config versions are incremental. A config is valid iff :
+  - all of its tags are OK, and
+  - the advertised size matches the number of bytes between BEGIN and END, and
+  - it's followed by an empty block according to the rules above ; or
+  - it's followed by another block whose config version number is exactly
+    the same + one; or
+  - it's followed by some padding then another block with an inferiour version
+    number (the current block has thus overwritten older versions and sits
+    before the next one to be overwritten).
+
+Saving a configuration consists in appending the data to save after the last
+version. When the end is reached, the process rolls over at the beginning. When
+overriding data, it might be necessary to erase a block first (for MTD devices),
+so the size of an erase block will have to be destroyed. If the MTD part is
+exactly the size of an erase block, it might sometimes be desirable to at least
+save the latest config before erasing, and to reflash it afterwards, followed by
+the new config. Some rules might be applied (eg: only keep it if both account
+for less than 2/3 of the flash size). This method ensures that we rarely erase
+the erase block when saving a configuration, it's mostly an append mechanism.
+
+The utility should provide some commands to report the list of configs that were
+found on the flash :
+  - size
+  - date
+  - version number
+  - state (valid, corrupted, truncated)
+
+It might be useful to implement ECC in software so that bad NANDs can be
+transparently recovered. It could also mean that some ECC values for some
+well-known contents replace the BEGIN/END tags.
+
+The utility will mostly work with stdin/stdout, so it will have to buffer the
+incoming data. This will allow it to transparently reformat and write when
+needed.
+
+A few points :
+  - since we erase in front of us, FFFFFFF always means end of data, so
+    whatever precedes is the last version
+  - last block = the highest numbered valid one.
+  - except for bad blocks, numbering is monotonous and may wrap somewhere
+    on the device, so a dichotomic search will work (if the smallest numbers
+    are on the right, it's a variant of the algorithm).
+  - bad blocks are problematic and can only be dealt with by linear search
+    before and after. So it might be worth considering blind areas during the
+    dichotomy when expanding edges (eg: when going to the right, move to the
+    first non-defect after, and when going to the left, move to the last non-
+    defect before).
