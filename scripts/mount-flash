@@ -1,0 +1,50 @@
+#!/bin/bash
+
+# This checks /proc/cmdline for the LAST 'flash=' statement, and uses its value
+# as a /dev entry to mount it read-only into /flash/
+
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin
+FLASHDIR=/flash
+
+mount_flash_ro() {
+  local flash
+
+  unset FLASH_MBR FLASH_HW FLASH_SW
+
+  if [ -s /var/state/flash-layout.rc ]; then
+    . /var/state/flash-layout.rc
+  fi
+
+  if [ -z "$FLASH_SW" ]; then
+    if [ -x /sbin/mk-flash-layout ]; then
+      /sbin/mk-flash-layout -k && return 0
+      if [ -s /var/state/flash-layout.rc ]; then
+        . /var/state/flash-layout.rc
+      fi
+    fi
+  fi
+
+  if [ -z "$FLASH_SW" ]; then
+    flash="$(cat /proc/cmdline)"
+    if [ -n "${flash##*flash=*}" ]; then
+      echo "No flash block device found on this system."
+      return 1
+    fi
+    flash=${flash##*flash=}
+    flash=${flash%% *}
+    [ -n "${flash##/dev/*}" ] && flash="/dev/$flash"
+  else
+    flash=$FLASH_SW
+  fi
+
+  echo "Mounting ${flash} on $FLASHDIR..."
+  cd /
+  umount -n -d $FLASHDIR >/dev/null 2>&1
+  if ! mount -n -r $flash $FLASHDIR >/dev/null 2>&1; then
+    echo "Error: mount failed."
+    return 1
+  fi
+  return 0
+}
+
+mount_flash_ro
