@@ -50,6 +50,8 @@ IMG_CMDLINE=
 FLASH_CMDLINE=
 CURR_ERASE_SIZE=
 TPLINK_ROOTFS_LEN=
+CURR_BLKDEV_MTD=
+CURR_BLKDEV_TYPE=
 
 # utility functions
 get_flash_from_cmdline() {
@@ -188,6 +190,14 @@ get_image_type() {
 		REPLY="tplink"
 		TPLINK_ROOTFS_LEN=$(( 0x${141}${142}${143}${144} ))
 	fi
+
+	# maintain a copy of the last known MTD block device if any
+	if [ -z "$vol" ] && \
+	   [ "$REPLY" = "fat" -o "$REPLY" = "jffs2" -o "$REPLY" = "ext2" ]; then
+		CURR_BLKDEV_MTD=$mtd
+		CURR_BLKDEV_TYPE=$REPLY
+	fi
+
 	[ -n "$REPLY" ] && return 0
 
 	# not identified
@@ -289,6 +299,12 @@ dump_layout() {
     fi
     rm -f "$LAYOUT_DIR/$LAYOUT_TMP"
     scan_mtd_list > "$LAYOUT_DIR/$LAYOUT_TMP"
+
+    # for compatibility with the old config-blkdev tools, add a FLASH_SW entry
+    # if a block device is known. By default we chose the last one.
+    if [ -n "$CURR_BLKDEV_MTD" ]; then
+	    echo "FLASH_SW=/dev/mtdblock$CURR_BLKDEV_MTD" >> "$LAYOUT_DIR/$LAYOUT_TMP"
+    fi
 
     if [ -n "$VERBOSE" ]; then
 	    cat "$LAYOUT_DIR/$LAYOUT_TMP"
