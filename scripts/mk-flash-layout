@@ -200,13 +200,12 @@ scan_vol_list() {
 	done
 	[ -n "$ubi" ] || return 0
 
-	vol=0
-	while [ -e ${ubidir}_${vol} ]; do
+	vol=-1
+	while [ -e ${ubidir}_$((++vol)) ]; do
 		get_ubi_size $ubi $vol && size=$REPLY || continue
 		get_ubi_name $ubi $vol && name=$REPLY || continue
 		get_image_type /dev/ubi${ubi}_$vol && img=$REPLY || continue
 		echo "VOL_MTD${mtd}_${vol}=/dev/ubi${ubi}_$vol:$size:$name:$img"
-		vol=$((vol+1))
 	done
 }
 
@@ -221,8 +220,8 @@ scan_mtd_list() {
 	local img
 
 	if [ -d /sys/class/mtd/. ]; then
-		mtd=0
-		while [ -e /sys/class/mtd/mtd$mtd ]; do
+		mtd=-1
+		while [ -e /sys/class/mtd/mtd$((++mtd)) ]; do
 			get_mtd_size $mtd && size=$REPLY || continue
 			get_mtd_name $mtd && name=$REPLY || continue
 			get_image_type /dev/mtd$mtd && img=$REPLY || continue
@@ -230,7 +229,6 @@ scan_mtd_list() {
 			if [ "$img" = "ubi" ]; then
 				scan_vol_list $mtd
 			fi
-			mtd=$((mtd+1))
 		done
 	elif [ -e "$PROC_MTD" ]; then
 		while read dev size erasesz name rest; do
