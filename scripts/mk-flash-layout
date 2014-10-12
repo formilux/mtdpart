@@ -44,6 +44,7 @@ LAYOUT_TMP=.flash-layout.rc
 PROC_PART=/proc/partitions
 PROC_CMDL=/proc/cmdline
 PROC_MTD=/proc/mtd
+MOUNT=/bin/mount
 
 # Some global variables which will be initialized later
 IMG_CMDLINE=
@@ -303,12 +304,28 @@ dump_layout() {
     # for compatibility with the old config-blkdev tools, add a FLASH_SW entry
     # if a block device is known. By default we chose the last one. If we have
     # a JFFS2 file system, we exploit a limit of the old tools which is that
-    # they pass the FLASH_SW as-is to mount, to force the FS type.
+    # they pass the FLASH_SW as-is to mount, to force the FS type. Also, for
+    # compatibility with the old config-blkdev tools, we have to try to mount
+    # the block device if -k is passed.
     if [ -n "$CURR_BLKDEV_MTD" ]; then
 	    if [ "$CURR_BLKDEV_TYPE" = "jffs2" ]; then
 		    echo "FLASH_SW=\"/dev/mtdblock$CURR_BLKDEV_MTD -t jffs2\"" >> "$LAYOUT_DIR/$LAYOUT_TMP"
+		    if [ -n "$KEEP_MOUNTED" ]; then
+			    if ( cd / ; $MOUNT -nrt jffs2 /dev/mtdblock$CURR_BLKDEV_MTD "$FLASH_DIR" ) >/dev/null 2>&1; then
+				    [ -z "$QUIET" ] && echo "Mounted /dev/mtdblock$CURR_BLKDEV_MTD on $FLASH_DIR"
+			    else
+				    [ -z "$QUIET" ] && echo "Failed to mount /dev/mtdblock$CURR_BLKDEV_MTD on $FLASH_DIR"
+			    fi
+		    fi
 	    else
 		    echo "FLASH_SW=/dev/mtdblock$CURR_BLKDEV_MTD" >> "$LAYOUT_DIR/$LAYOUT_TMP"
+		    if [ -n "$KEEP_MOUNTED" ]; then
+			    if ( cd / ; $MOUNT -nr /dev/mtdblock$CURR_BLKDEV_MTD "$FLASH_DIR" ) >/dev/null 2>&1; then
+				    [ -z "$QUIET" ] && echo "Mounted /dev/mtdblock$CURR_BLKDEV_MTD on $FLASH_DIR"
+			    else
+				    [ -z "$QUIET" ] && echo "Failed to mount /dev/mtdblock$CURR_BLKDEV_MTD on $FLASH_DIR"
+			    fi
+		    fi
 	    fi
     fi
 
