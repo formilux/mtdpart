@@ -156,6 +156,7 @@ get_image_type() {
 		55424923) REPLY="ubi"      ;;
 		27051956) REPLY="uimage"   ;;
 		85190320) REPLY="jffs2"    ;;
+		19852003) REPLY="jffs2"    ;;
 	esac
 
 	if [ "$REPLY" = "uimage" ]; then
