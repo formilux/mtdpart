@@ -49,6 +49,7 @@ PROC_MTD=/proc/mtd
 IMG_CMDLINE=
 FLASH_CMDLINE=
 CURR_ERASE_SIZE=
+TPLINK_ROOTFS_LEN=
 
 # utility functions
 get_flash_from_cmdline() {
@@ -180,6 +181,12 @@ get_image_type() {
 		fi
 	fi
 
+	if [ -z "$REPLY" -a "$mtd" = "1" -a -z "$vol" -a \
+             "${1}${2}${3}${4}" = "01000000" -a \
+	     "${129}${130}${131}${132}" = "00000200" ]; then
+		REPLY="tplink"
+		TPLINK_ROOTFS_LEN=$(( 0x${141}${142}${143}${144} ))
+	fi
 	[ -n "$REPLY" ] && return 0
 
 	# not identified
