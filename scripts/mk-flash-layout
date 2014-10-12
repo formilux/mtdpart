@@ -289,13 +289,11 @@ dump_layout() {
     fi
     rm -f "$LAYOUT_DIR/$LAYOUT_TMP"
     scan_mtd_list > "$LAYOUT_DIR/$LAYOUT_TMP"
-###################################################################################
-    #(   echo "FLASH_MBR=/dev/$FLASH_MBR"
-    #    echo "FLASH_HW=/dev/$FLASH_HW"
-    #    echo "FLASH_SW=/dev/$FLASH_SW"
-    #	echo "FOUND_IMG1=$FOUND_IMG1"
-    #	echo "FOUND_IMG2=$FOUND_IMG2"
-    #) > "$LAYOUT_DIR/$LAYOUT_TMP"
+
+    if [ -n "$VERBOSE" ]; then
+	    cat "$LAYOUT_DIR/$LAYOUT_TMP"
+    fi
+
     mv "$LAYOUT_DIR/$LAYOUT_TMP" "$LAYOUT_DIR/$LAYOUT_RC"
 }
 
@@ -347,20 +345,4 @@ done
 # First, check if a flash device and/or an image were specified on the command line
 get_flash_from_cmdline
 get_img_from_cmdline
-
-# Don't try to mount our partitions if the OS was not booted from a compliant
-# bootloader. Compliant bootloaders pass "img={active|backup}" on the kernel
-# command line. We still do it if "-s" was specified, which should only be used
-# for manual mounting.
-#if [ -z "$IMG_CMDLINE" -a -z "$SCAN" ]; then
-#    if [ -n "$VERBOSE" ]; then
-#	echo "Not scanning partitions since 'img=' not passed by the bootloader."
-#	echo "You may want to force a scan by passing '-s' on the command line."
-#    fi
-#    # Touch the layout file so that programs don't call us all the time.
-#    touch_layout_file
-#    exit 1
-#fi
-
-scan_mtd_list
 dump_layout
