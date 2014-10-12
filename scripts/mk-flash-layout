@@ -132,10 +132,16 @@ get_ubi_name() {
 # $1, and returns zero. If the device cannot be read, 1 is returned and REPLY
 # is left undefined. A read access is made to the device. Since identifying
 # ext2 requires at least 1082 bytes, we read all that at once. Warning, we're
-# using positional parameters, all offsets are shifted by one!
+# using positional parameters, all offsets are shifted by one! Optionally, $2
+# may indicate an mtd device number (or empty string to ignore), and $3 may
+# indicate a ubi volume number (or empty string to ignore).
 get_image_type() {
+	local dev=$1
+	local mtd=$2
+	local vol=$3
+
 	REPLY=""
-	set -- $(od -v -An -tx1 -N1082 2>/dev/null < "$1")
+	set -- $(od -v -An -tx1 -N1082 2>/dev/null < "$dev")
 	case "${1}${2}${3}${4}" in
 		"") return 1 ;;
 		ffffffff) REPLY="empty"    ;;
@@ -204,7 +210,7 @@ scan_vol_list() {
 	while [ -e ${ubidir}_$((++vol)) ]; do
 		get_ubi_size $ubi $vol && size=$REPLY || continue
 		get_ubi_name $ubi $vol && name=$REPLY || continue
-		get_image_type /dev/ubi${ubi}_$vol && img=$REPLY || continue
+		get_image_type /dev/ubi${ubi}_$vol $mtd $vol && img=$REPLY || continue
 		echo "VOL_MTD${mtd}_${vol}=/dev/ubi${ubi}_$vol:$size:$name:$img"
 	done
 }
@@ -224,7 +230,7 @@ scan_mtd_list() {
 		while [ -e /sys/class/mtd/mtd$((++mtd)) ]; do
 			get_mtd_size $mtd && size=$REPLY || continue
 			get_mtd_name $mtd && name=$REPLY || continue
-			get_image_type /dev/mtd$mtd && img=$REPLY || continue
+			get_image_type /dev/mtd$mtd $mtd "" && img=$REPLY || continue
 			echo "PART_MTD$mtd=/dev/mtd$mtd:$size:$name:$img"
 			if [ "$img" = "ubi" ]; then
 				scan_vol_list $mtd
@@ -236,7 +242,7 @@ scan_mtd_list() {
 			mtd=${dev#mtd}; mtd=${mtd%:}
 			get_mtd_size $mtd && size=$REPLY || continue
 			get_mtd_name $mtd && name=$REPLY || continue
-			get_image_type /dev/mtd$mtd && img=$REPLY || continue
+			get_image_type /dev/mtd$mtd $mtd "" && img=$REPLY || continue
 			echo "PART_MTD$mtd=/dev/mtd$mtd:$size:$name:$img"
 		done < "$PROC_MTD"
 	fi
