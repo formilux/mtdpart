@@ -1,0 +1,44 @@
+2014/10/12 - JFFS2 compatibility with older config-blkdev tools - w@1wt.eu
+
+The benefit of using JFFS2 to store a configuration is that older config-blkdev
+tools can be used unmodified provided that a few tricks are used and that some
+preparation is done prior to saving anything.
+
+First, the prerequisite is that the file system is the last one of type
+(fat, jffs2, ext2) among all the MTD partitions as listed in /sys or /proc.
+Since block devices are very rare on MTD partitions, if one is found, it's
+likely to be granted.
+
+Second, the kernel needs to have support for the JFFS2 file system, for MTD
+devices, and for MTD block devices (mtdblock).
+
+Upon first boot, an empty or unformated JFFS2 partition will not be detected.
+In order to format such a partition to use JFFS2, the whole MTD devide must be
+erased and formated as JFFS2 :
+
+    # flash_erase -q -j /dev/mtd3 0 0
+
+Note that on a NOR flash, it can be quite long (up to one minute for a few MB).
+
+After this is done, config-blkdev tools need a "/cfg" directory in this file
+system to accept the partition being used. Here's how to proceed :
+
+    # mount -t jffs2 /dev/mtdblock3 /flash
+    # mkdir /flash/cfg
+    # umount /flash
+
+Now it is possible to try to save the current configuration :
+
+    # save-etc -f
+
+After that, the partition is ready to be used and will automatically be
+detected by the various tools.
+
+An important point concerns devices using the TP-Link partition table layout.
+These devices leave a "rootfs_data" partition unused, which can be used as a
+/flash partition if formated as JFFS2. But it's important to remember that the
+location and size of this partition is dynamically computed from the current
+kernel and rootfs sizes, so it's likely that after a kernel or rootfs upgrade,
+the config partition will be damaged. One way to work around this is to align
+and pad partitions when building the image. Another one is to keep a backup
+copy of the config somewhere else during software image upgrades.
