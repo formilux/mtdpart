@@ -48,6 +48,7 @@ PROC_MTD=/proc/mtd
 # Some global variables which will be initialized later
 IMG_CMDLINE=
 FLASH_CMDLINE=
+CURR_ERASE_SIZE=
 
 # utility functions
 get_flash_from_cmdline() {
@@ -74,12 +75,15 @@ get_mtd_size() {
 	if [ -e "/sys/class/mtd/mtd$1/size" ]; then
 		REPLY=$(cat "/sys/class/mtd/mtd$1/size")
 		REPLY=$((REPLY / 1024))
+		CURR_ERASE_SIZE=$(cat "/sys/class/mtd/mtd$1/erasesize")
+		CURR_ERASE_SIZE=$((CURR_ERASE_SIZE/1024))
 		return 0
 	fi
 
 	while read dev size erasesz name rest; do
 		if [ "${dev%:}" = "mtd${1%:}" ]; then
 			REPLY=$((0x$size / 1024))
+			CURR_ERASE_SIZE=$((0x$erasesz / 1024))
 			return 0
 		fi
 	done < "$PROC_MTD"
