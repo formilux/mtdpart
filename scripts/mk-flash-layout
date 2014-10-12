@@ -193,6 +193,25 @@ get_image_type() {
 	return 1
 }
 
+# Adjust the rootfs size for squashfs embedded in a TP-Link image : the
+# reported rootfs by default reports the whole remaining flash, which ends with
+# rootfs_data, but we want to know the real squashfs size (eg: for backups),
+# which we round up to the erase size. The mtd device number is in $1, the size
+# in $2, its name in $3 and its type in $4. Returns 0 only if the size was
+# adjusted and put in REPLY.
+adjust_tplink_part_size() {
+	local mtd=$1
+	local size=$2
+	local name=$3
+	local type=$4
+
+	if [ "$mtd" = 2 -a -n "$TPLINK_ROOTFS_LEN" -a "$img" = "squashfs" ]; then
+		REPLY=$(((TPLINK_ROOTFS_LEN + CURR_ERASE_SIZE * 1024 - 1) / 1024 & -CURR_ERASE_SIZE))
+		return 0
+	fi
+	return 1
+}
+
 # Tries to scan the volumes list for the UBI device attached to the MTD number
 # passed in argument. Each entry found is displayed as a line beginning with
 # "VOL_MTD" followed by the MTD number, then "_" then the volume number.
@@ -242,6 +261,7 @@ scan_mtd_list() {
 			get_mtd_size $mtd && size=$REPLY || continue
 			get_mtd_name $mtd && name=$REPLY || continue
 			get_image_type /dev/mtd$mtd $mtd "" && img=$REPLY || continue
+			adjust_tplink_part_size "$mtd" "$size" "$name" "$img" && size=$REPLY
 			echo "PART_MTD$mtd=/dev/mtd$mtd:$size:$name:$img"
 			if [ "$img" = "ubi" ]; then
 				scan_vol_list $mtd
@@ -254,6 +274,7 @@ scan_mtd_list() {
 			get_mtd_size $mtd && size=$REPLY || continue
 			get_mtd_name $mtd && name=$REPLY || continue
 			get_image_type /dev/mtd$mtd $mtd "" && img=$REPLY || continue
+			adjust_tplink_part_size "$mtd" "$size" "$name" "$img" && size=$REPLY
 			echo "PART_MTD$mtd=/dev/mtd$mtd:$size:$name:$img"
 		done < "$PROC_MTD"
 	fi
