@@ -345,6 +345,9 @@ dump_layout() {
 			    fi
 		    fi
 	    fi
+    elif [ -n "$KEEP_MOUNTED" ]; then
+            [ -z "$QUIET" ] && echo "Found no flash block device to mount"
+            ret=1
     fi
 
     if [ -n "$VERBOSE" ]; then
