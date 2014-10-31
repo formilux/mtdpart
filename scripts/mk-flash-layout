@@ -308,6 +308,8 @@ scan_mtd_list() {
 
 # This function dumps the known variables into the layout file.
 dump_layout() {
+    local ret=0
+
     if [ ! -d "$LAYOUT_DIR/." ]; then
 	rm -f "$LAYOUT_DIR" >/dev/null
 	mkdir -p "$LAYOUT_DIR" || return 1
@@ -329,6 +331,7 @@ dump_layout() {
 				    [ -z "$QUIET" ] && echo "Mounted /dev/mtdblock$CURR_BLKDEV_MTD on $FLASH_DIR"
 			    else
 				    [ -z "$QUIET" ] && echo "Failed to mount /dev/mtdblock$CURR_BLKDEV_MTD on $FLASH_DIR"
+                                    ret=1
 			    fi
 		    fi
 	    else
@@ -338,6 +341,7 @@ dump_layout() {
 				    [ -z "$QUIET" ] && echo "Mounted /dev/mtdblock$CURR_BLKDEV_MTD on $FLASH_DIR"
 			    else
 				    [ -z "$QUIET" ] && echo "Failed to mount /dev/mtdblock$CURR_BLKDEV_MTD on $FLASH_DIR"
+                                    ret=1
 			    fi
 		    fi
 	    fi
@@ -347,7 +351,8 @@ dump_layout() {
 	    cat "$LAYOUT_DIR/$LAYOUT_TMP"
     fi
 
-    mv "$LAYOUT_DIR/$LAYOUT_TMP" "$LAYOUT_DIR/$LAYOUT_RC"
+    mv "$LAYOUT_DIR/$LAYOUT_TMP" "$LAYOUT_DIR/$LAYOUT_RC" || ret=$?
+    return $ret
 }
 
 # Creates an empty layout file
