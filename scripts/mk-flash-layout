@@ -197,7 +197,7 @@ get_image_type() {
 	# anywhere on the OOB data, or truncated to magic only on the
 	# last two bytes for small OOB blocks.
 	if [ -z "$vol" -a "$REPLY" = "empty" ]; then
-		set -- $(nanddump --oob -p --bb=padbad -l 1 /dev/mtd4 2>/dev/null |grep OOB|cut -f2 -d:)
+		set -- $(nanddump --oob -p --bb=padbad -l 1 $dev 2>/dev/null |grep OOB|cut -f2 -d:)
 		if [ -n "$*" ]; then
 			set -- " $* "
 			if [ -z "${1##* 85 19 03 20 *}" -o -z "${1##* 19 85 20 03 *}" -o -z "${1##* 19 85 }" -o -z "${1##* 85 19 } " ]; then
