@@ -158,8 +158,13 @@ get_image_type() {
 		68737173) REPLY="squashfs" ;;
 		55424923) REPLY="ubi"      ;;
 		27051956) REPLY="uimage"   ;;
-		85190320) REPLY="jffs2"    ;;
-		19852003) REPLY="jffs2"    ;;
+		851901e0|1985e001) REPLY="jffs2" ;; # type=dirent
+		851902e0|1985e002) REPLY="jffs2" ;; # type=inode
+		85190320|19852003) REPLY="jffs2" ;; # type=clean
+		85190420|19852004) REPLY="jffs2" ;; # type=padding
+		85190620|19852006) REPLY="jffs2" ;; # type=summary
+		851908e0|1985e008) REPLY="jffs2" ;; # type=xattr
+		851909e0|1985e009) REPLY="jffs2" ;; # type=xref
 	esac
 
 	if [ "$REPLY" = "uimage" ]; then
