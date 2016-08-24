@@ -96,10 +96,13 @@ get_mtd_size() {
 
 # Given an MTD partition number in $1, return its name in $REPLY, and 0 as a
 # return value. If the partition is not found, returns 1 and REPLY is left
-# undefined.
+# undefined. Note that block2mtd reports "block2mtd: /dev/sda3 as the name,
+# which is confusing because the ":" is already a delimitor. Here since it's
+# only reported as a hint to the user, we'll simply remove ':' and ' ' to
+# keep only "block2mtd/dev/sda3".
 get_mtd_name() {
 	if [ -e "/sys/class/mtd/mtd$1/name" ]; then
-		REPLY=$(cat "/sys/class/mtd/mtd$1/name")
+		REPLY=$(tr -d ': ' < "/sys/class/mtd/mtd$1/name")
 		return 0
 	fi
 
