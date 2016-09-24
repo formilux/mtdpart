@@ -397,6 +397,9 @@ scan_mmc_list() {
 dump_layout() {
     local ret=0
     local opts
+    local fst
+    local dev
+    local score
 
     if [ ! -d "$LAYOUT_DIR/." ]; then
 	rm -f "$LAYOUT_DIR" >/dev/null
@@ -407,23 +410,39 @@ dump_layout() {
     scan_mtd_list >> "$LAYOUT_DIR/$LAYOUT_TMP"
     scan_mmc_list >> "$LAYOUT_DIR/$LAYOUT_TMP"
 
-    # for compatibility with the old config-blkdev tools, add a FLASH_SW entry
-    # if a block device is known. By default we chose the last one. If we have
-    # a JFFS2 file system, we exploit a limit of the old tools which is that
-    # they pass the FLASH_SW as-is to mount, to force the FS type. Also, for
-    # compatibility with the old config-blkdev tools, we have to try to mount
-    # the block device if -k is passed.
-    if [ -n "$BEST_MTD_PART" ]; then
-	    if [ "$BEST_MTD_TYPE" = "jffs2" ]; then
+    # now we check what we have in decreasing score ordering, always giving the
+    # priority to MTD over MMC. The rationale here is that MTD is (almost)
+    # always soldered on board while MMC sometimes is a removable SD card
+    # reader. The highest scored partition is elected as the software
+    # partition. Also, for compatibility with the old config-blkdev tools, we
+    # have to try to mount the block device if -k is passed.
+    score=5
+    fst=
+    dev=
+    while [ $score -gt 0 ]; do
+	    if [ $BEST_MTD_SCORE -ge $score ]; then
+		    dev=/dev/mtdblock$BEST_MTD_PART
+		    fst=$BEST_MTD_TYPE
+		    break
+	    elif [ $BEST_MMC_SCORE -ge $score ]; then
+		    dev=$BEST_MMC_PART
+		    fst=$BEST_MMC_TYPE
+		    break
+	    fi
+	    ((score--))
+    done
+
+    if [ $score -gt 0 ]; then
+	    if [ "$fst" = "jffs2" ]; then
 		    opts=" -j jffs2"
 	    fi
-	    echo "FLASH_SW=\"/dev/mtdblock${BEST_MTD_PART}${opts}\"" >> "$LAYOUT_DIR/$LAYOUT_TMP"
+	    echo "FLASH_SW=\"${dev}${opts}\"" >> "$LAYOUT_DIR/$LAYOUT_TMP"
 	    if [ -n "$KEEP_MOUNTED" ]; then
-		    if ( cd / ; $MOUNT -nr $opts /dev/mtdblock$BEST_MTD_PART "$FLASH_DIR" ) >/dev/null 2>&1; then
-			    [ -z "$QUIET" ] && echo "Mounted /dev/mtdblock$BEST_MTD_PART on $FLASH_DIR"
+		    if ( cd / ; $MOUNT -nr $opts $dev "$FLASH_DIR" ) >/dev/null 2>&1; then
+			    [ -z "$QUIET" ] && echo "Mounted $dev on $FLASH_DIR"
 		    else
-			    [ -z "$QUIET" ] && echo "Failed to mount /dev/mtdblock$BEST_MTD_PART on $FLASH_DIR"
-                            ret=1
+			    [ -z "$QUIET" ] && echo "Failed to mount $dev on $FLASH_DIR"
+			    ret=1
 		    fi
 	    fi
     elif [ -n "$KEEP_MOUNTED" ]; then
