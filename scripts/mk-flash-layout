@@ -317,6 +317,7 @@ scan_mtd_list() {
 # This function dumps the known variables into the layout file.
 dump_layout() {
     local ret=0
+    local opts
 
     if [ ! -d "$LAYOUT_DIR/." ]; then
 	rm -f "$LAYOUT_DIR" >/dev/null
@@ -333,24 +334,15 @@ dump_layout() {
     # the block device if -k is passed.
     if [ -n "$CURR_BLKDEV_MTD" ]; then
 	    if [ "$CURR_BLKDEV_TYPE" = "jffs2" ]; then
-		    echo "FLASH_SW=\"/dev/mtdblock$CURR_BLKDEV_MTD -t jffs2\"" >> "$LAYOUT_DIR/$LAYOUT_TMP"
-		    if [ -n "$KEEP_MOUNTED" ]; then
-			    if ( cd / ; $MOUNT -nrt jffs2 /dev/mtdblock$CURR_BLKDEV_MTD "$FLASH_DIR" ) >/dev/null 2>&1; then
-				    [ -z "$QUIET" ] && echo "Mounted /dev/mtdblock$CURR_BLKDEV_MTD on $FLASH_DIR"
-			    else
-				    [ -z "$QUIET" ] && echo "Failed to mount /dev/mtdblock$CURR_BLKDEV_MTD on $FLASH_DIR"
-                                    ret=1
-			    fi
-		    fi
-	    else
-		    echo "FLASH_SW=/dev/mtdblock$CURR_BLKDEV_MTD" >> "$LAYOUT_DIR/$LAYOUT_TMP"
-		    if [ -n "$KEEP_MOUNTED" ]; then
-			    if ( cd / ; $MOUNT -nr /dev/mtdblock$CURR_BLKDEV_MTD "$FLASH_DIR" ) >/dev/null 2>&1; then
-				    [ -z "$QUIET" ] && echo "Mounted /dev/mtdblock$CURR_BLKDEV_MTD on $FLASH_DIR"
-			    else
-				    [ -z "$QUIET" ] && echo "Failed to mount /dev/mtdblock$CURR_BLKDEV_MTD on $FLASH_DIR"
-                                    ret=1
-			    fi
+		    opts=" -j jffs2"
+	    fi
+	    echo "FLASH_SW=\"/dev/mtdblock${CURR_BLKDEV_MTD}${opts}\"" >> "$LAYOUT_DIR/$LAYOUT_TMP"
+	    if [ -n "$KEEP_MOUNTED" ]; then
+		    if ( cd / ; $MOUNT -nr $opts /dev/mtdblock$CURR_BLKDEV_MTD "$FLASH_DIR" ) >/dev/null 2>&1; then
+			    [ -z "$QUIET" ] && echo "Mounted /dev/mtdblock$CURR_BLKDEV_MTD on $FLASH_DIR"
+		    else
+			    [ -z "$QUIET" ] && echo "Failed to mount /dev/mtdblock$CURR_BLKDEV_MTD on $FLASH_DIR"
+                            ret=1
 		    fi
 	    fi
     elif [ -n "$KEEP_MOUNTED" ]; then
