@@ -45,6 +45,7 @@ PROC_PART=/proc/partitions
 PROC_CMDL=/proc/cmdline
 PROC_MTD=/proc/mtd
 MOUNT=/bin/mount
+UMOUNT=/bin/umount
 
 # Some global variables which will be initialized later
 IMG_CMDLINE=
@@ -53,6 +54,7 @@ CURR_ERASE_SIZE=
 TPLINK_ROOTFS_LEN=
 BEST_MTD_PART=
 BEST_MTD_TYPE=
+BEST_MTD_SCORE=0
 
 # utility functions
 get_flash_from_cmdline() {
@@ -139,6 +141,42 @@ get_ubi_name() {
 	return 1
 }
 
+# Mounts blkdev $1 of FS type $2, and returns the following scores on stdout :
+#   0 : partition doesn't exist (not returned here)
+#   1 : couldn't mount (status non-zero on return)
+#   2 : not tested (ie: test another one first)
+#   3 : could mount, but neither /cfg nor /.journal found
+#   4 : could mount, and only /cfg found
+#   5 : could mount, and both /cfg and /.journal were found
+get_blk_mount_score()
+{
+	local dev=$1
+	local fst=$2
+	local score=0
+	local opts
+
+	if [ "$fst" = "jffs2" ]; then
+		opts="-t jffs2"
+	fi
+
+	if ! (cd / && $MOUNT -nr $opts "$dev" "$FLASH_DIR") >/dev/null 2>&1; then
+		echo 1
+		return 1
+	fi
+
+	if [ -e "$FLASH_DIR/cfg" ]; then
+		if [ -e "$FLASH_DIR/.journal" ]; then
+			score=5
+		else
+			score=4
+		fi
+	else
+		score=3
+	fi
+	(cd / && $UMOUNT -nd "$FLASH_DIR") >/dev/null 2>&1
+	echo $score
+}
+
 # Returns in $REPLY the identified type of the image located on the device in
 # $1, and returns zero. If the device cannot be read, 1 is returned and REPLY
 # is left undefined. A read access is made to the device. Since identifying
@@ -214,11 +252,18 @@ get_image_type() {
 		fi
 	fi
 
-	# maintain a copy of the last known MTD block device if any
+	# maintain a copy of the last known MTD block device if any. Note that
+	# it is important to prefer last ones because it's common for MTD to
+	# have multiple mountable parts at the beginning that we prefer not to
+	# touch.
 	if [ -n "$mtd" ] && [ -z "$vol" ] && \
 	   [ "$REPLY" = "fat" -o "$REPLY" = "jffs2" -o "$REPLY" = "ext2" ]; then
-		BEST_MTD_PART=$mtd
-		BEST_MTD_TYPE=$REPLY
+		score=$(get_blk_mount_score "/dev/mtdblock$mtd" "$REPLY")
+		if [ -n "$score" ] && [ $score -ge $BEST_MTD_SCORE ]; then
+			BEST_MTD_PART=$mtd
+			BEST_MTD_TYPE=$REPLY
+			BEST_MTD_SCORE=$score
+		fi
 	fi
 
 	[ -n "$REPLY" ] && return 0
