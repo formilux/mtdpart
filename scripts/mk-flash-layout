@@ -55,6 +55,9 @@ TPLINK_ROOTFS_LEN=
 BEST_MTD_PART=
 BEST_MTD_TYPE=
 BEST_MTD_SCORE=0
+BEST_MMC_PART=
+BEST_MMC_TYPE=
+BEST_MMC_SCORE=0
 
 # utility functions
 get_flash_from_cmdline() {
@@ -255,7 +258,8 @@ get_image_type() {
 	# maintain a copy of the last known MTD block device if any. Note that
 	# it is important to prefer last ones because it's common for MTD to
 	# have multiple mountable parts at the beginning that we prefer not to
-	# touch.
+	# touch. For MMC it's the opposite, we keep the first best one as it's
+	# common to see data partitions at the end of an eMMC flash or micro-SD.
 	if [ -n "$mtd" ] && [ -z "$vol" ] && \
 	   [ "$REPLY" = "fat" -o "$REPLY" = "jffs2" -o "$REPLY" = "ext2" ]; then
 		score=$(get_blk_mount_score "/dev/mtdblock$mtd" "$REPLY")
@@ -263,6 +267,14 @@ get_image_type() {
 			BEST_MTD_PART=$mtd
 			BEST_MTD_TYPE=$REPLY
 			BEST_MTD_SCORE=$score
+		fi
+	elif [ -z "${dev##/dev/mmcblk*}" ] && \
+	   [ "$REPLY" = "fat" -o "$REPLY" = "jffs2" -o "$REPLY" = "ext2" ]; then
+		score=$(get_blk_mount_score "$dev" "$REPLY")
+		if [ -n "$score" ] && [ $score -gt $BEST_MMC_SCORE ]; then
+			BEST_MMC_PART=$dev
+			BEST_MMC_TYPE=$REPLY
+			BEST_MMC_SCORE=$score
 		fi
 	fi
 
@@ -359,6 +371,28 @@ scan_mtd_list() {
 	fi
 }
 
+# Tries to scan the list of MMC partitions. Each entry found is displayed as a
+# line beginning with "PART_MMC" followed by a sequential number. UBI volumes
+# are not scanned on MMC since they don't make much sense (wear levelling is
+# already implemented in the MMC layer).. No error is returned.
+scan_mmc_list() {
+	local mmcnum=0
+	local size
+	local name
+	local img
+
+
+	# build a list of all the mmcblk*p* partitions. Just like the blkdev
+	# equivalent, we ignore partitions smaller than 8064 blocks.
+	while read maj min size name rest; do
+		[ -z "${maj##*[0-9]}" -a -n "$name" ] || continue
+		[ -z "${name##mmcblk*[0-9]p[0-9]*}" ] || continue
+		[ $size -ge 8064 ] || continue
+		get_image_type /dev/$name "" "" && img=$REPLY || continue
+		echo "PART_MMC$((mmcnum++))=/dev/$name:$size:$img"
+	done < $PROC_PART
+}
+
 # This function dumps the known variables into the layout file.
 dump_layout() {
     local ret=0
@@ -369,7 +403,9 @@ dump_layout() {
 	mkdir -p "$LAYOUT_DIR" || return 1
     fi
     rm -f "$LAYOUT_DIR/$LAYOUT_TMP"
-    scan_mtd_list > "$LAYOUT_DIR/$LAYOUT_TMP"
+    touch "$LAYOUT_DIR/$LAYOUT_TMP"
+    scan_mtd_list >> "$LAYOUT_DIR/$LAYOUT_TMP"
+    scan_mmc_list >> "$LAYOUT_DIR/$LAYOUT_TMP"
 
     # for compatibility with the old config-blkdev tools, add a FLASH_SW entry
     # if a block device is known. By default we chose the last one. If we have
