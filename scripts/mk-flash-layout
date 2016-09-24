@@ -204,7 +204,7 @@ get_image_type() {
 	# clean marker is on the OOB data. It can be either complete
 	# anywhere on the OOB data, or truncated to magic only on the
 	# last two bytes for small OOB blocks.
-	if [ -z "$vol" -a "$REPLY" = "empty" ]; then
+	if [ -n "$mtd" -a -z "$vol" -a "$REPLY" = "empty" ]; then
 		set -- $(nanddump --oob -p --bb=padbad -l 1 $dev 2>/dev/null |grep OOB|cut -f2 -d:)
 		if [ -n "$*" ]; then
 			set -- " $* "
@@ -215,7 +215,7 @@ get_image_type() {
 	fi
 
 	# maintain a copy of the last known MTD block device if any
-	if [ -z "$vol" ] && \
+	if [ -n "$mtd" ] && [ -z "$vol" ] && \
 	   [ "$REPLY" = "fat" -o "$REPLY" = "jffs2" -o "$REPLY" = "ext2" ]; then
 		CURR_BLKDEV_MTD=$mtd
 		CURR_BLKDEV_TYPE=$REPLY
