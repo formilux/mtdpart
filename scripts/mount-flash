@@ -5,6 +5,7 @@
 
 export PATH=/bin:/sbin:/usr/bin:/usr/sbin
 FLASHDIR=/flash
+FAIL_IN_ERROR=
 
 mount_flash_ro() {
   local flash
@@ -44,7 +45,30 @@ mount_flash_ro() {
     echo "Error: mount failed."
     return 1
   fi
+
+  [ -d $FLASHDIR/cfg/. ] && return 0
+
+  # $FLASHDIR/cfg doesn't exist. Either it's a jffs2 and it was not formated,
+  # or it's another FS mounted for the first time and we'd rather create it
+  # now, because leaving this device mounted makes it unusable for anything.
+  if [ -z "${flash##*jffs2*}" ] || \
+    ! mount -wo remount $FLASHDIR >/dev/null 2>&1 || \
+    ! mkdir -m 0755 -p $FLASHDIR/cfg >/dev/null 2>&1 || \
+    ! mount -ro remount $FLASHDIR >/dev/null 2>&1; then
+    if [ -n "$FAIL_ON_ERROR" ]; then
+      umount -n -d $FLASHDIR >/dev/null 2>&1
+      echo "Error: flash partition not formated yet."
+      return 1
+    else
+      echo "Warning: flash partition not formated yet."
+      return 0
+    fi
+  fi
   return 0
 }
+
+if [ "$1" = "-e" ]; then
+  FAIL_ON_ERROR=1
+fi
 
 mount_flash_ro
