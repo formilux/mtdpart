@@ -52,6 +52,9 @@ IMG_CMDLINE=
 FLASH_CMDLINE=
 CURR_ERASE_SIZE=
 TPLINK_ROOTFS_LEN=
+BEST_UBI_PART=
+BEST_UBI_TYPE=
+BEST_UBI_SCORE=0
 BEST_MTD_PART=
 BEST_MTD_TYPE=
 BEST_MTD_SCORE=0
@@ -191,6 +194,7 @@ get_image_type() {
 	local dev=$1
 	local mtd=$2
 	local vol=$3
+	local score=""
 
 	REPLY=""
 	set -- $(od -v -An -tx1 -N1082 2>/dev/null < "$dev")
@@ -201,6 +205,7 @@ get_image_type() {
 		fd377a58) REPLY="xz"       ;;
 		68737173) REPLY="squashfs" ;;
 		55424923) REPLY="ubi"      ;;
+		31181006) REPLY="ubifs"    ;;
 		27051956) REPLY="uimage"   ;;
 		851901e0|1985e001) REPLY="jffs2" ;; # type=dirent
 		851902e0|1985e002) REPLY="jffs2" ;; # type=inode
@@ -260,7 +265,16 @@ get_image_type() {
 	# have multiple mountable parts at the beginning that we prefer not to
 	# touch. For MMC it's the opposite, we keep the first best one as it's
 	# common to see data partitions at the end of an eMMC flash or micro-SD.
-	if [ -n "$mtd" ] && [ -z "$vol" ] && \
+	if [ -n "$mtd" ] && [ -n "$vol" ] && [ "$REPLY" = "ubifs" ]; then
+		dev="${dev##*/}"
+		vol="$(cat /sys/class/ubi/${dev}/name 2>/dev/null)"
+		[ -z "$vol" ] || score=$(get_blk_mount_score "${dev%_*}:${vol}" "$REPLY")
+		if [ -n "$score" ] && [ $score -ge $BEST_UBI_SCORE ]; then
+			BEST_UBI_PART="${dev%_*}:${vol}"
+			BEST_UBI_TYPE="ubifs"
+			BEST_UBI_SCORE=$score
+		fi
+	elif [ -n "$mtd" ] && [ -z "$vol" ] && \
 	   [ "$REPLY" = "fat" -o "$REPLY" = "jffs2" -o "$REPLY" = "ext2" ]; then
 		score=$(get_blk_mount_score "/dev/mtdblock$mtd" "$REPLY")
 		if [ -n "$score" ] && [ $score -ge $BEST_MTD_SCORE ]; then
@@ -420,7 +434,11 @@ dump_layout() {
     fst=
     dev=
     while [ $score -gt 0 ]; do
-	    if [ $BEST_MTD_SCORE -ge $score ]; then
+	    if [ $BEST_UBI_SCORE -ge $score ]; then
+		    dev=$BEST_UBI_PART
+		    fst=$BEST_UBI_TYPE
+		    break
+	    elif [ $BEST_MTD_SCORE -ge $score ]; then
 		    dev=/dev/mtdblock$BEST_MTD_PART
 		    fst=$BEST_MTD_TYPE
 		    break
@@ -433,8 +451,8 @@ dump_layout() {
     done
 
     if [ $score -gt 0 ]; then
-	    if [ "$fst" = "jffs2" ]; then
-		    opts=" -t jffs2"
+	    if [ "$fst" = "jffs2" -o "$fst" = "ubifs" ]; then
+		    opts=" -t $fst"
 	    fi
 	    echo "FLASH_SW=\"${dev}${opts}\"" >> "$LAYOUT_DIR/$LAYOUT_TMP"
 	    if [ -n "$KEEP_MOUNTED" ]; then
